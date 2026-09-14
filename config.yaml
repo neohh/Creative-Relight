@@ -1,0 +1,50 @@
+# Creative Relight Configuration - Cloud Download Edition
+
+app:
+  name: "Creative Relight"
+  version: "1.0.0"
+  edition: "cloud"
+  temp_dir: "temp_uploads"
+
+models:
+  # Cloud download configuration
+  mode: "cloud_download"  # Options: "local", "cloud_download"
+  
+  download:
+    # HuggingFace repository
+    repository: "kevin2/model-weights-download"
+    cache_dir: "models"
+    auto_download: true
+    show_progress: true
+    retry_attempts: 3
+    timeout: 300
+  
+  lighting:
+    version: "v2.1"
+    resize_conf: 1024
+    # Files to download from HuggingFace
+    files:
+      - "cr_lighting_v21/stage_0_v21.pt"
+      - "cr_lighting_v21/stage_1_v21.pt"
+      - "cr_lighting_v21/stage_2_v21.pt"
+      - "cr_lighting_v21/stage_3_v21.pt"
+      - "cr_lighting_v21/stage_4_v21.pt"
+  
+  geometry:
+    model_name: "Ruicheng/moge-2-vitl-normal"
+    # Files to download from HuggingFace
+    files:
+      - "cr_geometry_vitl/model.pt"
+
+processing:
+  default_padding: 6
+  default_frame_step: 1
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"]
+  
+output:
+  components:
+    - albedo
+    - shading
+    - specular
+    - depth
+    - normal

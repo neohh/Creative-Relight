@@ -10,6 +10,9 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 
+# Enable OpenCV's OpenEXR codec before any EXR decode happens in this process
+os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
+
 # Try to import multimedia components
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -182,7 +185,7 @@ class MediaPreviewWidget(QWidget):
             
             # Detect media type
             video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v']
-            image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+            image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
             
             if file_ext in video_extensions:
                 return self.load_video(media_path)
@@ -201,7 +204,34 @@ class MediaPreviewWidget(QWidget):
         try:
             print(f"📸 Loading image: {Path(image_path).name}")
             
-            pixmap = QPixmap(image_path)
+            if str(image_path).lower().endswith(('.exr', '.hdr', '.pic')):
+                # Qt can't decode EXR/HDR - load via OpenCV and tonemap for preview
+                pixmap = None
+                try:
+                    import cv2
+                    import numpy as np
+                    data = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
+                    if data is not None:
+                        data = data.astype('float32')
+                        if data.ndim == 2:
+                            data = np.dstack([data] * 3)
+                        rgb = data[:, :, :3][:, :, ::-1]  # BGR -> RGB
+                        rgb = np.clip(rgb, 0.0, 1.0)
+                        rgb = np.where(rgb <= 0.0031308, rgb * 12.92,
+                                       1.055 * np.power(np.maximum(rgb, 1e-10), 1.0 / 2.4) - 0.055)
+                        rgb8 = (np.clip(rgb, 0, 1) * 255).astype('uint8')
+                        rgb8 = np.ascontiguousarray(rgb8)
+                        h, w = rgb8.shape[:2]
+                        from PyQt6.QtGui import QImage
+                        qimg = QImage(rgb8.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+                        pixmap = QPixmap.fromImage(qimg)
+                except Exception as exr_err:
+                    print(f"⚠️ EXR/HDR preview failed: {exr_err}")
+                if pixmap is None:
+                    self.show_error("Unsupported file format: HDR image could not be decoded")
+                    return False
+            else:
+                pixmap = QPixmap(image_path)
             if pixmap.isNull():
                 self.show_error("Invalid image format")
                 return False
@@ -657,7 +687,7 @@ class MediaPreviewWidget(QWidget):
         """Handle folder drop for image sequences"""
         try:
             # Get all image files from the folder
-            extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+            extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
             files = []
             for ext in extensions:
                 files.extend([str(p) for p in Path(folder_path).glob(f'*{ext}')])
@@ -692,7 +722,7 @@ class MediaPreviewWidget(QWidget):
             
             # Define file types
             video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v']
-            image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+            image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
             
             if file_ext in video_extensions:
                 # Video file(s) - only use first one

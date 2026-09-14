@@ -238,7 +238,7 @@ class ImagePreviewWidget(QLabel):
                 
     def is_image_file(self, file_path):
         """Check if file is a supported image format"""
-        supported_formats = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+        supported_formats = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
         return Path(file_path).suffix.lower() in supported_formats
 
     def update_previews(self, previews):

@@ -1,3 +1,8 @@
+import os
+# Enable OpenCV's OpenEXR codec before the first cv2 import of the process
+# (pip builds ship it compiled-in but disabled by default)
+os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '1')
+
 import torch
 import numpy as np
 import cv2

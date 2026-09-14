@@ -20,7 +20,7 @@ class FileBrowserWidget(QWidget):
         super().__init__(parent)
         self.current_directory = Path.home()
         self.supported_formats = {
-            'image': ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp'],
+            'image': ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic'],
             'video': ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm']
         }
         self.setup_ui()
@@ -113,8 +113,9 @@ class FileBrowserWidget(QWidget):
             
     def select_single_file(self):
         """Open file selection dialog"""
-        file_filters = "All Supported (*.png *.jpg *.jpeg *.tiff *.bmp *.gif *.mp4 *.avi *.mov);;"
+        file_filters = "All Supported (*.png *.jpg *.jpeg *.tiff *.bmp *.gif *.exr *.hdr *.mp4 *.avi *.mov);;"
         file_filters += "Image Files (*.png *.jpg *.jpeg *.tiff *.bmp *.gif);;"
+        file_filters += "HDR Files (*.exr *.hdr *.pic);;"
         file_filters += "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv);;"
         file_filters += "All Files (*)"
         

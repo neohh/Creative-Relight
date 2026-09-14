@@ -10,8 +10,8 @@ def ensure_dir(path):
     return path
 
 def get_image_files(directory):
-    """Get all image files from a directory"""
-    valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    """Get all image files from a directory (including EXR/HDR)"""
+    valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.exr', '.hdr'}
     directory = Path(directory)
     
     if not directory.exists():

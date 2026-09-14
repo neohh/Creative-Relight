@@ -1067,8 +1067,8 @@ class MainWindow(QMainWindow):
         
         # Video extensions
         video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm']
-        # Image extensions  
-        image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+        # Image extensions (incl. HDR formats)
+        image_extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
         
         # If file type is explicitly set, respect that choice
         if file_type == "Video File":
@@ -1084,6 +1084,8 @@ class MainWindow(QMainWindow):
             
         elif file_type == "Single Image":
             if file_ext in image_extensions:
+                return self.image_processor
+            elif file_ext in ('.exr', '.hdr', '.pic'):
                 return self.image_processor
             else:
                 self.progress_panel.add_status_message(f"Warning: {Path(file_path).name} is not an image file but Single Image mode is selected")
@@ -1103,7 +1105,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Images",
             "",
-            "Image Files (*.png *.jpg *.jpeg *.tiff *.bmp)"
+            "Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.exr *.hdr);;HDR Files (*.exr *.hdr);;All Files (*)"
         )
         
         if files:
@@ -1123,7 +1125,7 @@ class MainWindow(QMainWindow):
             
             # Get all image files from the folder
             from pathlib import Path
-            extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif']
+            extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif', '.exr', '.hdr']
             files = []
             for ext in extensions:
                 files.extend([str(p) for p in Path(folder).glob(f'*{ext}')])
@@ -1227,7 +1229,7 @@ class MainWindow(QMainWindow):
                 self,
                 "Select Image Files",
                 "",
-                "Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.webp);;All Files (*)"
+                "Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.webp *.exr *.hdr);;HDR Files (*.exr *.hdr *.pic);;All Files (*)"
             )
         elif file_type == "Video File":
             files, _ = QFileDialog.getOpenFileNames(
@@ -1247,7 +1249,7 @@ class MainWindow(QMainWindow):
                 
                 # Get all image files from the folder
                 from pathlib import Path
-                extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']
+                extensions = ['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp', '.exr', '.hdr', '.pic']
                 files = []
                 for ext in extensions:
                     files.extend([str(p) for p in Path(folder).glob(f'*{ext}')])

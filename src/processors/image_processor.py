@@ -17,10 +17,10 @@ except ModuleNotFoundError:
 
 try:
     # Try direct import first (dev mode - utils/ is in sys.path)
-    from image_utils import resize_to_original, ensure_uint8
+    from image_utils import resize_to_original, ensure_uint8, is_hdr_path, load_hdr_image
 except ModuleNotFoundError:
     # Fallback to package import (frozen mode)
-    from utils.image_utils import resize_to_original, ensure_uint8
+    from utils.image_utils import resize_to_original, ensure_uint8, is_hdr_path, load_hdr_image
 
 class ImageProcessor:
     """Process single images to generate all 5 passes"""
@@ -82,16 +82,24 @@ class ImageProcessor:
             return {'saved_files': {}, 'previews': {}, 'message': 'Processing stopped'}
         
         # Load and prepare image
-        if isinstance(image_input, str):
+        source_alpha = None
+        if isinstance(image_input, (str, Path)) and is_hdr_path(image_input):
+            # EXR/HDR input: float loader with linear->sRGB tonemapping.
+            # The alpha channel becomes the object mask for all passes.
+            image_array, source_alpha = load_hdr_image(image_input)
+            original_size = (image_array.shape[1], image_array.shape[0])
+        elif isinstance(image_input, str):
             image = Image.open(image_input).convert('RGB')
+            original_size = image.size
+            image_array = np.array(image).astype(np.float32) / 255.0
         elif isinstance(image_input, np.ndarray):
             image = Image.fromarray(image_input)
+            original_size = image.size
+            image_array = np.array(image).astype(np.float32) / 255.0
         else:
             image = image_input
-        
-        # Get original dimensions
-        original_size = image.size
-        image_array = np.array(image).astype(np.float32) / 255.0
+            original_size = image.size
+            image_array = np.array(image).astype(np.float32) / 255.0
         
         # Create output directories only for selected passes
         output_path = Path(output_dir)
@@ -100,6 +108,9 @@ class ImageProcessor:
             if export_config.get(component, False):
                 dirs[component] = output_path / component
                 dirs[component].mkdir(parents=True, exist_ok=True)
+        
+        # Alpha map pass is only produced for sources with transparency (EXR/HDR)
+        is_hdr = is_hdr_path(image_input) if isinstance(image_input, (str, Path)) else False
         
         # Check stop flag before processing
         if self.should_stop:
@@ -129,6 +140,17 @@ class ImageProcessor:
             frame_number = f"{self._auto_index:06d}"
             self._auto_index += 1
         print(f"[IMAGE_PROC] Saving frame number: {frame_number} (from: {image_input})")
+        
+        # Save alpha/mask pass for transparent sources (EXR/HDR with alpha)
+        if source_alpha is not None:
+            alpha_dir = output_path / 'alpha'
+            alpha_dir.mkdir(parents=True, exist_ok=True)
+            alpha_resized = cv2.resize(source_alpha, original_size, interpolation=cv2.INTER_LINEAR)
+            alpha_path = alpha_dir / f"alpha_{frame_number}.png"
+            cv2.imwrite(str(alpha_path), alpha_resized)
+            saved_files['alpha'] = str(alpha_path)
+            previews['alpha'] = alpha_resized
+            print(f"[IMAGE_PROC] Saved alpha map: {alpha_path}")
         
         # Save albedo
         if export_config.get('albedo', False) and 'albedo' in lighting_results and lighting_results['albedo'] is not None:

@@ -4,22 +4,33 @@ from pathlib import Path
 import cv2
 import sys
 import re
+import os
+
+# Enable OpenCV OpenEXR support for 32-bit float export
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 # Handle imports for both development and frozen (PyInstaller) environments
 try:
     from lighting_model import LightingModel
     from geometry_model import GeometryModel
 except ModuleNotFoundError:
-    from models.lighting_model import LightingModel
-    from models.geometry_model import GeometryModel
+    try:
+        from models.lighting_model import LightingModel
+        from models.geometry_model import GeometryModel
+    except ModuleNotFoundError:
+        from src.models.lighting_model import LightingModel
+        from src.models.geometry_model import GeometryModel
 
 try:
     from image_utils import resize_to_original, ensure_uint8
 except ModuleNotFoundError:
-    from utils.image_utils import resize_to_original, ensure_uint8
+    try:
+        from utils.image_utils import resize_to_original, ensure_uint8
+    except ModuleNotFoundError:
+        from src.utils.image_utils import resize_to_original, ensure_uint8
 
 class ImageProcessor:
-    """Process single images to generate all 5 passes"""
+    """Process single images to generate all 5 passes in 32-bit OpenEXR and 16-bit PNG"""
     
     def __init__(self, device='cuda'):
         self.device = device
@@ -33,7 +44,7 @@ class ImageProcessor:
     
     def process(self, image_input, output_dir, export_config=None, start_number=0, padding=6):
         """
-        Process a single image and save selected passes
+        Process a single image and save selected passes in 32-bit OpenEXR and 16-bit PNG.
         """
         self.should_stop = False
         
@@ -82,12 +93,12 @@ class ImageProcessor:
         saved_files = {}
         previews = {}
         
-        # Auto-detect next free frame number by checking existing files
+        # Auto-detect next free frame number by checking existing files (.exr and .png)
         max_existing = -1
         for comp, comp_dir in dirs.items():
             if comp_dir.exists():
                 for item in comp_dir.iterdir():
-                    m = re.match(rf"^{comp}_(\d+)\.png$", item.name)
+                    m = re.match(rf"^{comp}_(\d+)\.(png|exr)$", item.name)
                     if m:
                         max_existing = max(max_existing, int(m.group(1)))
         
@@ -98,42 +109,91 @@ class ImageProcessor:
             
         frame_number = f"{assigned_num:0{padding}d}"
         
-        # Save albedo
+        # Save albedo (32-bit float EXR + 16-bit PNG)
         if export_config.get('albedo', False) and 'albedo' in lighting_results and lighting_results['albedo'] is not None:
             albedo = resize_to_original(lighting_results['albedo'], original_size)
-            albedo_uint8 = ensure_uint8(albedo)
-            albedo_path = dirs['albedo'] / f"albedo_{frame_number}.png"
-            Image.fromarray(albedo_uint8).save(albedo_path)
-            saved_files['albedo'] = str(albedo_path)
-            previews['albedo'] = albedo_uint8
+            albedo_f32 = np.clip(albedo, 0.0, 1.0).astype(np.float32)
+            albedo_bgr_f32 = cv2.cvtColor(albedo_f32, cv2.COLOR_RGB2BGR)
+            
+            # 1. 32-bit float OpenEXR
+            albedo_exr_path = dirs['albedo'] / f"albedo_{frame_number}.exr"
+            cv2.imwrite(str(albedo_exr_path), albedo_bgr_f32)
+            
+            # 2. 16-bit PNG
+            albedo_png_path = dirs['albedo'] / f"albedo_{frame_number}.png"
+            cv2.imwrite(str(albedo_png_path), (albedo_bgr_f32 * 65535.0).astype(np.uint16))
+            
+            saved_files['albedo'] = str(albedo_exr_path)
+            previews['albedo'] = ensure_uint8(albedo)
         
-        # Save specular
+        # Save specular (32-bit float EXR + 16-bit PNG)
         if export_config.get('specular', False) and 'specular' in lighting_results and lighting_results['specular'] is not None:
             specular = resize_to_original(lighting_results['specular'], original_size)
-            specular_uint8 = ensure_uint8(specular)
-            specular_path = dirs['specular'] / f"specular_{frame_number}.png"
-            if len(specular_uint8.shape) == 2:
-                Image.fromarray(specular_uint8, mode='L').save(specular_path)
+            specular_f32 = np.clip(specular, 0.0, 1.0).astype(np.float32)
+            
+            specular_exr_path = dirs['specular'] / f"specular_{frame_number}.exr"
+            specular_png_path = dirs['specular'] / f"specular_{frame_number}.png"
+            
+            if len(specular_f32.shape) == 2:
+                cv2.imwrite(str(specular_exr_path), specular_f32)
+                cv2.imwrite(str(specular_png_path), (specular_f32 * 65535.0).astype(np.uint16))
             else:
-                Image.fromarray(specular_uint8).save(specular_path)
-            saved_files['specular'] = str(specular_path)
-            previews['specular'] = specular_uint8
+                spec_bgr = cv2.cvtColor(specular_f32, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(str(specular_exr_path), spec_bgr)
+                cv2.imwrite(str(specular_png_path), (spec_bgr * 65535.0).astype(np.uint16))
+                
+            saved_files['specular'] = str(specular_exr_path)
+            previews['specular'] = ensure_uint8(specular)
         
-        # Save depth
+        # Save depth (32-bit float EXR + 16-bit PNG)
         if export_config.get('depth', False) and 'depth' in geometry_results and geometry_results['depth'] is not None:
-            depth = cv2.resize(geometry_results['depth'], original_size, interpolation=cv2.INTER_LINEAR)
-            depth_path = dirs['depth'] / f"depth_{frame_number}.png"
-            cv2.imwrite(str(depth_path), depth)
-            saved_files['depth'] = str(depth_path)
-            previews['depth'] = depth
+            # Check for high-precision float depth
+            if 'depth_float' in geometry_results and geometry_results['depth_float'] is not None:
+                depth_src = geometry_results['depth_float']
+            else:
+                depth_src = geometry_results['depth'].astype(np.float32) / 255.0
+                
+            depth_f32 = cv2.resize(depth_src, original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
+            depth_f32 = np.clip(depth_f32, 0.0, 1.0)
+            
+            # 1. 32-bit float OpenEXR (.exr) - Infinite precision for Z-defocus / relighting
+            depth_exr_path = dirs['depth'] / f"depth_{frame_number}.exr"
+            cv2.imwrite(str(depth_exr_path), depth_f32)
+            
+            # 2. 16-bit PNG (.png) - 65,536 discrete levels, zero banding
+            depth_png_path = dirs['depth'] / f"depth_{frame_number}.png"
+            cv2.imwrite(str(depth_png_path), (depth_f32 * 65535.0).astype(np.uint16))
+            
+            # Optional: Metric depth EXR if available
+            if 'depth_raw' in geometry_results and geometry_results['depth_raw'] is not None:
+                depth_raw_resized = cv2.resize(geometry_results['depth_raw'], original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
+                depth_metric_exr_path = dirs['depth'] / f"depth_metric_{frame_number}.exr"
+                cv2.imwrite(str(depth_metric_exr_path), depth_raw_resized)
+            
+            saved_files['depth'] = str(depth_exr_path)
+            previews['depth'] = (depth_f32 * 255.0).astype(np.uint8)
         
-        # Save normal
+        # Save normal (32-bit float EXR + 16-bit PNG)
         if export_config.get('normal', False) and 'normal' in geometry_results and geometry_results['normal'] is not None:
-            normal = cv2.resize(geometry_results['normal'], original_size, interpolation=cv2.INTER_LINEAR)
-            normal_path = dirs['normal'] / f"normal_{frame_number}.png"
-            cv2.imwrite(str(normal_path), cv2.cvtColor(normal, cv2.COLOR_RGB2BGR))
-            saved_files['normal'] = str(normal_path)
-            previews['normal'] = normal
+            if 'normal_float' in geometry_results and geometry_results['normal_float'] is not None:
+                normal_src = geometry_results['normal_float']
+            else:
+                normal_src = geometry_results['normal'].astype(np.float32) / 255.0
+                
+            normal_f32 = cv2.resize(normal_src, original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
+            normal_f32 = np.clip(normal_f32, 0.0, 1.0)
+            normal_bgr = cv2.cvtColor(normal_f32, cv2.COLOR_RGB2BGR)
+            
+            # 1. 32-bit float OpenEXR (.exr)
+            normal_exr_path = dirs['normal'] / f"normal_{frame_number}.exr"
+            cv2.imwrite(str(normal_exr_path), normal_bgr)
+            
+            # 2. 16-bit PNG (.png)
+            normal_png_path = dirs['normal'] / f"normal_{frame_number}.png"
+            cv2.imwrite(str(normal_png_path), (normal_bgr * 65535.0).astype(np.uint16))
+            
+            saved_files['normal'] = str(normal_exr_path)
+            previews['normal'] = (normal_f32 * 255.0).astype(np.uint8)
         
         return {
             'saved_files': saved_files,

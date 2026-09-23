@@ -163,12 +163,6 @@ class ImageProcessor:
             depth_exr_path = dirs['depth'] / f"depth_{frame_number}.exr"
             _safe_write_exr(depth_exr_path, depth_f32)
             
-            # Optional: Metric depth EXR if available
-            if 'depth_raw' in geometry_results and geometry_results['depth_raw'] is not None:
-                depth_raw_resized = cv2.resize(geometry_results['depth_raw'], original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
-                depth_metric_exr_path = dirs['depth'] / f"depth_metric_{frame_number}.exr"
-                _safe_write_exr(depth_metric_exr_path, depth_raw_resized)
-            
             saved_files['depth'] = str(depth_exr_path)
             # Monotonic 8-bit preview for UI display directly in memory
             previews['depth'] = (depth_f32 * 255.0).astype(np.uint8)

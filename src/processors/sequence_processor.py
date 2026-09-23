@@ -1,3 +1,5 @@
+import os
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import numpy as np
 from pathlib import Path
 from PIL import Image
@@ -18,11 +20,11 @@ except ModuleNotFoundError:
 try:
     # Try direct import first (dev mode - utils/ is in sys.path)
     from file_handler import ensure_dir, get_image_files
-    from image_utils import ensure_uint8, load_hdr_image, is_hdr_path
+    from image_utils import ensure_uint8
 except ModuleNotFoundError:
     # Fallback to package import (frozen mode)
     from utils.file_handler import ensure_dir, get_image_files
-    from utils.image_utils import ensure_uint8, load_hdr_image, is_hdr_path
+    from utils.image_utils import ensure_uint8
 
 # Lazy import - TemporalStabilizer will be imported only when needed
 TemporalStabilizer = None
@@ -119,16 +121,6 @@ class SequenceProcessor:
             traceback.print_exc()
             return f"❌ {error_msg}"
         
-        # Alpha maps are produced for transparent sources (EXR/HDR with alpha)
-        any_alpha = any(is_hdr_path(p) for p in image_files)
-        if any_alpha:
-            try:
-                dirs['alpha'] = ensure_dir(output_path / 'alpha')
-                print("[SEQUENCE] Created directory for alpha")
-            except Exception as e:
-                print(f"[SEQUENCE WARNING] Could not create alpha dir: {e}")
-                any_alpha = False
-        
         processed_count = 0
         
         try:
@@ -154,18 +146,11 @@ class SequenceProcessor:
                 try:
                     # Load image
                     print(f"[SEQUENCE] Loading image: {img_path}")
-                    source_alpha = None
-                    if is_hdr_path(img_path):
-                        # EXR/HDR frame: float loader with tonemapping; alpha becomes the mask
-                        image_array, source_alpha = load_hdr_image(img_path)
-                        original_size = (image_array.shape[1], image_array.shape[0])
-                        print(f"[SEQUENCE] HDR image loaded, size: {original_size}, alpha: {source_alpha is not None}")
-                    else:
-                        image = Image.open(img_path).convert('RGB')
-                        # Get original dimensions for resizing outputs
-                        original_size = image.size
-                        print(f"[SEQUENCE] Image loaded, size: {original_size}")
-                        image_array = np.array(image).astype(np.float32) / 255.0
+                    image = Image.open(img_path).convert('RGB')
+                    # Get original dimensions for resizing outputs
+                    original_size = image.size
+                    print(f"[SEQUENCE] Image loaded, size: {original_size}")
+                    image_array = np.array(image).astype(np.float32) / 255.0
                     
                     # Process with models only if needed
                     lighting_results = {}
@@ -187,7 +172,7 @@ class SequenceProcessor:
                             print(f"[SEQUENCE-TEMPORAL] Applying temporal consistency to frame {idx + 1}")
                             
                             # Convert image to uint8 RGB for optical flow
-                            frame_rgb = (np.clip(image_array, 0.0, 1.0) * 255.0).astype(np.uint8)
+                            frame_rgb = (np.array(image) * 255).astype(np.uint8) if isinstance(image, Image.Image) else np.array(image).astype(np.uint8)
                             
                             # Compute optical flow for current frame
                             flow = self.temporal_stabilizer.compute_optical_flow(frame_rgb)
@@ -225,11 +210,6 @@ class SequenceProcessor:
                     # Save selected components
                     frame_num = f"{idx:06d}"
                     
-                    # Save alpha/mask for transparent sources (EXR/HDR)
-                    if any_alpha and source_alpha is not None:
-                        alpha_resized = cv2.resize(source_alpha, original_size, interpolation=cv2.INTER_LINEAR)
-                        cv2.imwrite(str(dirs['alpha'] / f"alpha_{frame_num}.png"), alpha_resized)
-                    
                     # Save albedo - resize to original dimensions (if not already resized by temporal consistency)
                     if export_config.get('albedo', False) and 'albedo' in lighting_results and lighting_results['albedo'] is not None:
                         print("[SEQUENCE] Saving albedo...")
@@ -256,18 +236,34 @@ class SequenceProcessor:
                         else:
                             Image.fromarray(specular).save(dirs['specular'] / f"specular_{frame_num}.png")
                     
-                    # Save depth - resize to original dimensions
+                    # Save depth - 32-bit float OpenEXR
                     if export_config.get('depth', False) and 'depth' in geometry_results and geometry_results['depth'] is not None:
-                        print("[SEQUENCE] Saving depth...")
-                        depth = cv2.resize(geometry_results['depth'], original_size, interpolation=cv2.INTER_LINEAR)
-                        cv2.imwrite(str(dirs['depth'] / f"depth_{frame_num}.png"), depth)
+                        print("[SEQUENCE] Saving depth (32-bit float EXR)...")
+                        if 'depth_float' in geometry_results and geometry_results['depth_float'] is not None:
+                            depth_src = geometry_results['depth_float']
+                        else:
+                            depth_src = geometry_results['depth'].astype(np.float32) / 255.0
+                        depth_f32 = cv2.resize(depth_src, original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
+                        depth_f32 = np.clip(depth_f32, 0.0, 1.0)
+                        try:
+                            cv2.imwrite(str(dirs['depth'] / f"depth_{frame_num}.exr"), depth_f32)
+                        except Exception as e:
+                            print(f"[SEQUENCE] EXR write failed: {e}")
                     
-                    # Save normal - resize to original dimensions
+                    # Save normal - 32-bit float OpenEXR
                     if export_config.get('normal', False) and 'normal' in geometry_results and geometry_results['normal'] is not None:
-                        print("[SEQUENCE] Saving normal...")
-                        normal = cv2.resize(geometry_results['normal'], original_size, interpolation=cv2.INTER_LINEAR)
-                        cv2.imwrite(str(dirs['normal'] / f"normal_{frame_num}.png"), 
-                                   cv2.cvtColor(normal, cv2.COLOR_RGB2BGR))
+                        print("[SEQUENCE] Saving normal (32-bit float EXR)...")
+                        if 'normal_float' in geometry_results and geometry_results['normal_float'] is not None:
+                            normal_src = geometry_results['normal_float']
+                        else:
+                            normal_src = geometry_results['normal'].astype(np.float32) / 255.0
+                        normal_f32 = cv2.resize(normal_src, original_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
+                        normal_f32 = np.clip(normal_f32, 0.0, 1.0)
+                        try:
+                            cv2.imwrite(str(dirs['normal'] / f"normal_{frame_num}.exr"), 
+                                       cv2.cvtColor(normal_f32, cv2.COLOR_RGB2BGR))
+                        except Exception as e:
+                            print(f"[SEQUENCE] EXR write failed: {e}")
                     
                     processed_count += 1
                     print(f"[SEQUENCE] Successfully processed image {idx + 1}")
